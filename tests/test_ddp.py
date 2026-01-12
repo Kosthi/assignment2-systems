@@ -1,6 +1,5 @@
 import logging
 from copy import deepcopy
-from typing import Type
 
 import pytest
 import torch
@@ -52,7 +51,7 @@ def _test_DistributedDataParallelCPU(
     rank: int,
     world_size: int,
     bucket_size_mb: float,
-    model_class: Type[torch.nn.Module],
+    model_class: type[torch.nn.Module],
 ):
     # Use gloo backend for CPU
     device = _setup_process_group(rank=rank, world_size=world_size, backend="gloo")

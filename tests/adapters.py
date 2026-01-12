@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Type
 
 import torch
 
 
-
-def get_flashattention_autograd_function_pytorch() -> Type:
+def get_flashattention_autograd_function_pytorch() -> type:
     """
     Returns a torch.autograd.Function subclass that implements FlashAttention2.
     The expectation is that this class will implement FlashAttention2
@@ -19,7 +17,7 @@ def get_flashattention_autograd_function_pytorch() -> Type:
     raise NotImplementedError
 
 
-def get_flashattention_autograd_function_triton() -> Type:
+def get_flashattention_autograd_function_triton() -> type:
     """
     Returns a torch.autograd.Function subclass that implements FlashAttention2
     using Triton kernels.
@@ -120,7 +118,7 @@ def ddp_bucketed_on_train_batch_start(ddp_model: torch.nn.Module, optimizer: tor
     raise NotImplementedError
 
 
-def get_sharded_optimizer(params, optimizer_cls: Type[torch.optim.Optimizer], **kwargs) -> torch.optim.Optimizer:
+def get_sharded_optimizer(params, optimizer_cls: type[torch.optim.Optimizer], **kwargs) -> torch.optim.Optimizer:
     """
     Returns a torch.optim.Optimizer that handles optimizer state sharding
     of the given optimizer_cls on the provided parameters.

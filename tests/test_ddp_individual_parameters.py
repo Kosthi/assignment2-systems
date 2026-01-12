@@ -1,6 +1,5 @@
 import logging
 from copy import deepcopy
-from typing import Type
 
 import pytest
 import torch
@@ -36,7 +35,7 @@ def test_DistributedDataParallelIndividualParameters(model_class):
     )
 
 
-def _test_DistributedDataParallelIndividualParameters(rank: int, world_size: int, model_class: Type[torch.nn.Module]):
+def _test_DistributedDataParallelIndividualParameters(rank: int, world_size: int, model_class: type[torch.nn.Module]):
     # Use gloo backend for CPU
     device = _setup_process_group(rank=rank, world_size=world_size, backend="gloo")
     # Execute barrier prior to running test to ensure that every process
