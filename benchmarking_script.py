@@ -1,26 +1,65 @@
+"""
+Transformer 模型前向和反向传播性能基准测试脚本
+
+该脚本用于测量 Transformer 模型在 GPU 上的前向传播和反向传播耗时。
+主要功能：
+1. 根据给定超参数初始化 Transformer 模型
+2. 生成随机批次的测试数据
+3. 执行预热步骤后，统计多次迭代的耗时
+4. 支持仅测试前向传播或同时测试前向和反向传播
+
+注意事项：
+- 使用 timeit.default_timer() 进行高精度计时
+- 每次迭代后调用 torch.cuda.synchronize() 确保 GPU 操作完成
+  （因为 CUDA 调用是异步的，需要同步才能准确测量时间）
+"""
+
 from __future__ import annotations
 
-import argparse
-import statistics
-import timeit
+import argparse  # 命令行参数解析模块
+import numpy
+import statistics  # 统计计算模块（用于计算均值和标准差）
+import timeit  # 高精度计时模块
 
-import torch
+import torch  # PyTorch 深度学习框架
 
 
 def _parse_dtype(dtype: str) -> torch.dtype:
+    """
+    将字符串类型的精度名称转换为 PyTorch 的 dtype 对象
+
+    Args:
+        dtype: 精度字符串，支持 "fp32", "fp16", "bf16"
+
+    Returns:
+        对应的 torch.dtype 对象
+
+    Raises:
+        ValueError: 不支持的精度类型
+    """
     match dtype:
         case "fp32":
-            return torch.float32
+            return torch.float32  # 32位单精度浮点
         case "fp16":
-            return torch.float16
+            return torch.float16  # 16位半精度浮点
         case "bf16":
-            return torch.bfloat16
+            return torch.bfloat16  # 16位 bfloat 格式（更大的动态范围）
         case _:
             raise ValueError(f"Unsupported dtype: {dtype}")
 
 
 def _device_from_arg(device: str) -> torch.device:
+    """
+    根据参数确定运行设备
+
+    Args:
+        device: 设备字符串，"auto" 表示自动选择，或指定 "cuda"/"cpu"/"mps"
+
+    Returns:
+        torch.device 对象
+    """
     if device == "auto":
+        # 自动选择设备：优先 CUDA GPU，其次 Apple MPS，最后 CPU
         if torch.cuda.is_available():
             return torch.device("cuda")
         if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
@@ -30,11 +69,31 @@ def _device_from_arg(device: str) -> torch.device:
 
 
 def _synchronize_if_needed(device: torch.device) -> None:
+    """
+    如果是 CUDA 设备，执行同步操作
+
+    重要说明：
+    CUDA 调用是异步的 —— 当调用 CUDA 内核时，函数会立即返回控制权给 CPU，
+    而不会等待 GPU 计算完成。因此需要调用 synchronize() 来等待所有 GPU
+    内核执行完毕，才能准确测量 CUDA 内核的运行时间。
+
+    Args:
+        device: 当前使用的设备
+    """
     if device.type == "cuda":
-        torch.cuda.synchronize(device)
+        torch.cuda.synchronize(device)  # 等待 GPU 上所有操作完成
 
 
 def _format_seconds_as_ms(x_s: float) -> str:
+    """
+    将秒转换为毫秒格式的字符串
+
+    Args:
+        x_s: 以秒为单位的时间
+
+    Returns:
+        格式化的毫秒字符串，保留3位小数
+    """
     return f"{x_s * 1e3:.3f} ms"
 
 
@@ -48,6 +107,22 @@ def _make_model(
     d_ff: int,
     rope_theta: float,
 ):
+    """
+    根据给定超参数创建 Transformer 语言模型
+
+    Args:
+        vocab_size: 词汇表大小
+        context_length: 上下文长度（最大序列长度）
+        d_model: 模型隐藏层维度
+        num_layers: Transformer 层数
+        num_heads: 注意力头数
+        d_ff: 前馈网络中间层维度
+        rope_theta: RoPE 位置编码的 theta 参数
+
+    Returns:
+        初始化的 BasicsTransformerLM 模型实例
+    """
+    # 延迟导入模型类，避免在不需要时加载整个模块
     from cs336_basics.model import BasicsTransformerLM
 
     return BasicsTransformerLM(
@@ -62,38 +137,68 @@ def _make_model(
 
 
 def main() -> None:
+    """
+    主函数：执行端到端的性能基准测试
+
+    流程：
+    1. 解析命令行参数
+    2. 初始化模型和数据
+    3. 执行预热步骤
+    4. 执行正式测量步骤
+    5. 输出统计结果
+    """
+    # ========== 命令行参数解析 ==========
     parser = argparse.ArgumentParser()
-    parser.add_argument("--vocab-size", type=int, default=50304)
-    parser.add_argument("--context-length", type=int, default=1024)
-    parser.add_argument("--seq-len", type=int, default=1024)
-    parser.add_argument("--batch-size", type=int, default=4)
 
-    parser.add_argument("--d-model", type=int, default=768)
-    parser.add_argument("--num-layers", type=int, default=12)
-    parser.add_argument("--num-heads", type=int, default=12)
-    parser.add_argument("--d-ff", type=int, default=3072)
-    parser.add_argument("--rope-theta", type=float, default=10000.0)
+    # 模型架构相关参数
+    parser.add_argument("--vocab-size", type=int, default=50304)  # 词汇表大小
+    parser.add_argument("--context-length", type=int, default=1024)  # 上下文长度（RoPE 缓存长度）
+    parser.add_argument("--seq-len", type=int, default=1024)  # 输入序列长度
+    parser.add_argument("--batch-size", type=int, default=4)  # 批次大小
 
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--dtype", type=str, default="fp32", choices=["fp32", "fp16", "bf16"])
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--d-model", type=int, default=768)  # 模型隐藏维度
+    parser.add_argument("--num-layers", type=int, default=12)  # Transformer 层数
+    parser.add_argument("--num-heads", type=int, default=12)  # 注意力头数
+    parser.add_argument("--d-ff", type=int, default=3072)  # FFN 中间层维度
+    parser.add_argument("--rope-theta", type=float, default=10000.0)  # RoPE theta 参数
 
-    parser.add_argument("--warmup-steps", type=int, default=5)
-    parser.add_argument("--steps", type=int, default=10)
-    parser.add_argument("--mode", type=str, default="fwd_bwd", choices=["fwd", "fwd_bwd"])
+    # 运行环境参数
+    parser.add_argument("--device", type=str, default="auto")  # 运行设备
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="fp32",  # 数据精度
+        choices=["fp32", "fp16", "bf16"],
+    )
+    parser.add_argument("--seed", type=int, default=0)  # 随机种子
+
+    # 基准测试参数
+    parser.add_argument("--warmup-steps", type=int, default=5)  # 预热步数（不计入计时）
+    parser.add_argument("--steps", type=int, default=10)  # 正式测量步数
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="fwd_bwd",  # 测试模式
+        choices=["fwd", "fwd_bwd"],
+    )  # fwd: 仅前向, fwd_bwd: 前向+反向
 
     args = parser.parse_args()
 
+    # 验证参数：序列长度不能超过上下文长度
     if args.seq_len > args.context_length:
         raise ValueError("--seq-len must be <= --context-length (RoPE cache length).")
 
-    device = _device_from_arg(args.device)
-    dtype = _parse_dtype(args.dtype)
+    # ========== 设备和精度设置 ==========
+    device = _device_from_arg(args.device)  # 确定运行设备
+    dtype = _parse_dtype(args.dtype)  # 解析数据精度
 
+    # 设置随机种子以确保可重复性
     torch.manual_seed(args.seed)
     if device.type == "cuda":
-        torch.cuda.manual_seed_all(args.seed)
+        torch.cuda.manual_seed_all(args.seed)  # 为所有 GPU 设置种子
 
+    # ========== 模型初始化 ==========
+    # 使用随机权重初始化模型（因为我们只关注性能，不关注准确性）
     model = _make_model(
         vocab_size=args.vocab_size,
         context_length=args.context_length,
@@ -102,64 +207,82 @@ def main() -> None:
         num_heads=args.num_heads,
         d_ff=args.d_ff,
         rope_theta=args.rope_theta,
-    ).to(device=device)
+    ).to(device=device)  # 将模型移到目标设备
 
+    # 如果使用混合精度训练，将模型转换为对应精度
     use_autocast = device.type == "cuda" and dtype in (torch.float16, torch.bfloat16)
     if use_autocast:
         model = model.to(dtype=dtype)
 
+    # 设置模型为训练模式（fwd_bwd）或评估模式（fwd）
     model.train(args.mode == "fwd_bwd")
 
+    # ========== 生成随机测试数据 ==========
+    # 生成随机 token ID 作为输入（范围 [0, vocab_size)）
     x = torch.randint(
         low=0,
         high=args.vocab_size,
-        size=(args.batch_size, args.seq_len),
+        size=(args.batch_size, args.seq_len),  # [batch_size, seq_len]
         dtype=torch.int64,
         device=device,
     )
 
-    total_times_s: list[float] = []
-    fwd_times_s: list[float] = []
-    bwd_times_s: list[float] = []
-    total_iters = args.warmup_steps + args.steps
-    timer = timeit.default_timer
+    # ========== 性能测量 ==========
+    # 用于存储各阶段耗时的列表
+    total_times_s: list[float] = []  # 总耗时（前向+反向）
+    fwd_times_s: list[float] = []  # 前向传播耗时
+    bwd_times_s: list[float] = []  # 反向传播耗时
+
+    total_iters = args.warmup_steps + args.steps  # 总迭代次数 = 预热 + 正式测量
+    timer = timeit.default_timer  # 使用系统最高精度时钟（比 time.time() 更精确）
 
     for i in range(total_iters):
+        # 如果是前向+反向模式，需要先清除梯度
         if args.mode == "fwd_bwd":
-            model.zero_grad(set_to_none=True)
+            model.zero_grad(set_to_none=True)  # 设为 None 比设为 0 更高效
 
-        _synchronize_if_needed(device)
-        t0 = timer()
+        # ---------- 前向传播 ----------
+        _synchronize_if_needed(device)  # 同步 GPU，确保之前的操作完成
+        t0 = timer()  # 记录前向开始时间
 
+        # 使用自动混合精度进行前向传播
         with torch.autocast(device_type="cuda", dtype=dtype, enabled=use_autocast):
-            logits = model(x)
+            logits = model(x)  # 前向传播，获取 logits
+            # 如果需要反向传播，计算一个简单的损失（logits 均值）
             loss = logits.float().mean() if args.mode == "fwd_bwd" else None
 
-        _synchronize_if_needed(device)
-        t1 = timer()
+        _synchronize_if_needed(device)  # 同步 GPU，确保前向传播完成
+        t1 = timer()  # 记录前向结束时间
 
+        # ---------- 反向传播 ----------
         if args.mode == "fwd_bwd":
             assert loss is not None
-            loss.backward()
+            loss.backward()  # 反向传播计算梯度
 
-        _synchronize_if_needed(device)
-        t2 = timer()
+        _synchronize_if_needed(device)  # 同步 GPU，确保反向传播完成
+        t2 = timer()  # 记录反向结束时间
 
+        # ---------- 记录耗时（仅在预热后） ----------
         if i >= args.warmup_steps:
-            fwd_times_s.append(t1 - t0)
+            # 预热结束后才开始记录正式测量的耗时
+            fwd_times_s.append(t1 - t0)  # 前向耗时
             if args.mode == "fwd_bwd":
-                bwd_times_s.append(t2 - t1)
-            total_times_s.append(t2 - t0)
+                bwd_times_s.append(t2 - t1)  # 反向耗时
+            total_times_s.append(t2 - t0)  # 总耗时
 
+    # ========== 统计与输出 ==========
     def _mean_std(xs: list[float]) -> tuple[float, float]:
-        mean = statistics.fmean(xs) if xs else float("nan")
-        std = statistics.stdev(xs) if len(xs) > 1 else 0.0
+        """计算列表的均值和标准差"""
+        mean = np.mean(xs)
+        std = np.std(xs, ddof=1)
         return mean, std
 
+    # 计算各阶段的均值和标准差
     total_mean_s, total_std_s = _mean_std(total_times_s)
     fwd_mean_s, fwd_std_s = _mean_std(fwd_times_s)
     bwd_mean_s, bwd_std_s = _mean_std(bwd_times_s) if bwd_times_s else (float("nan"), float("nan"))
 
+    # 打印测试配置和结果
     print(f"device={device}")
     print(f"dtype={args.dtype}")
     print(
