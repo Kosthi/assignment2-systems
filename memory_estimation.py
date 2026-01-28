@@ -28,7 +28,7 @@ class ModelConfig:
     d_ff: int
     num_layers: int
     num_heads: int
-    vocab_size: int = 50257  # GPT-2 vocabulary size
+    vocab_size: int = 10000  # GPT-2 vocabulary size
     context_length: int = 2048
     rope_theta: float = 10000.0
 
@@ -123,7 +123,7 @@ def estimate_memory_theoretical(config: ModelConfig, dtype: torch.dtype = torch.
     # Activation memory estimation (rough, depends on batch size and seq length)
     # For a rough estimate: batch_size * seq_len * d_model * num_layers * factor
     # This is highly variable; we'll estimate for batch=1, seq=512
-    batch_size = 1
+    batch_size = 4
     seq_len = 512
 
     # Activations per layer (rough estimate):
@@ -187,7 +187,7 @@ def measure_memory_actual(
         # Create model
         model = BasicsTransformerLM(
             vocab_size=config.vocab_size,
-            context_length=config.context_length,
+            context_length=seq_len,
             d_model=config.d_model,
             num_layers=config.num_layers,
             num_heads=config.num_heads,
@@ -263,7 +263,7 @@ def measure_memory_actual(
 def print_theoretical_estimates():
     """Print theoretical memory estimates for all model configurations."""
     print("=" * 100)
-    print("THEORETICAL MEMORY ESTIMATION (Batch=1, Seq=512)")
+    print("THEORETICAL MEMORY ESTIMATION (Batch=4, Seq=512)")
     print("=" * 100)
 
     # FP32 estimates
@@ -366,7 +366,7 @@ def print_actual_measurements(batch_size: int = 1, seq_len: int = 512):
     print("=" * 100 + "\n")
 
     # Test with FP16
-    print("### FP16 (float16) Measurements ###\n")
+    print("### FP32 (float32) Measurements ###\n")
     print(f"{'Model':<8} {'Params':>12} {'Model':>12} {'Inference':>12} {'Inference':>12} {'Training':>12}")
     print(f"{'':8} {'':>12} {'Memory':>12} {'Activation':>12} {'Peak':>12} {'Peak':>12}")
     print("-" * 80)
@@ -374,7 +374,7 @@ def print_actual_measurements(batch_size: int = 1, seq_len: int = 512):
     for config in MODEL_CONFIGS:
         results = measure_memory_actual(
             config,
-            dtype=torch.float16,
+            dtype=torch.float32,
             batch_size=batch_size,
             seq_len=seq_len,
             measure_training=True,
@@ -437,7 +437,7 @@ def main():
     print_theoretical_estimates()
 
     # Print actual measurements if GPU is available
-    print_actual_measurements(batch_size=1, seq_len=512)
+    print_actual_measurements(batch_size=4, seq_len=512)
 
     # Print GPU recommendations
     print_gpu_recommendations()
