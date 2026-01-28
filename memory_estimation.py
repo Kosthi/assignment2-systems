@@ -28,7 +28,7 @@ class ModelConfig:
     d_ff: int
     num_layers: int
     num_heads: int
-    vocab_size: int = 10000  # GPT-2 vocabulary size
+    vocab_size: int = 10000  # pdf asked
     context_length: int = 2048
     rope_theta: float = 10000.0
 
@@ -122,7 +122,7 @@ def estimate_memory_theoretical(config: ModelConfig, dtype: torch.dtype = torch.
 
     # Activation memory estimation (rough, depends on batch size and seq length)
     # For a rough estimate: batch_size * seq_len * d_model * num_layers * factor
-    # This is highly variable; we'll estimate for batch=1, seq=512
+    # This is highly variable; we'll estimate for batch=4, seq=512
     batch_size = 4
     seq_len = 512
 
