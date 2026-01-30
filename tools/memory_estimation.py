@@ -36,13 +36,13 @@ class ModelConfig:
 
 
 # Model configurations from the user's table
-MODEL_CONFIGS = [
-    ModelConfig(name="small", d_model=768, d_ff=3072, num_layers=12, num_heads=12),
-    ModelConfig(name="medium", d_model=1024, d_ff=4096, num_layers=24, num_heads=16),
-    ModelConfig(name="large", d_model=1280, d_ff=5120, num_layers=36, num_heads=20),
-    ModelConfig(name="xl", d_model=1600, d_ff=6400, num_layers=48, num_heads=25),
-    ModelConfig(name="2.7B", d_model=2560, d_ff=10240, num_layers=32, num_heads=32),
-]
+MODEL_CONFIGS = {
+    "small": ModelConfig(name="small", d_model=768, d_ff=3072, num_layers=12, num_heads=12),
+    "medium": ModelConfig(name="medium", d_model=1024, d_ff=4096, num_layers=24, num_heads=16),
+    "large": ModelConfig(name="large", d_model=1280, d_ff=5120, num_layers=36, num_heads=20),
+    "xl": ModelConfig(name="xl", d_model=1600, d_ff=6400, num_layers=48, num_heads=25),
+    "2.7B": ModelConfig(name="2.7B", d_model=2560, d_ff=10240, num_layers=32, num_heads=32),
+}
 
 
 def count_parameters(model: nn.Module) -> int:
@@ -265,18 +265,20 @@ def measure_memory_actual(
 def get_theoretical_estimates_df(dtype: torch.dtype = torch.float32) -> pd.DataFrame:
     """Get theoretical memory estimates as a DataFrame."""
     data = []
-    for config in MODEL_CONFIGS:
+    for name, config in MODEL_CONFIGS.items():
         est = estimate_memory_theoretical(config, dtype)
-        data.append({
-            "Model": config.name,
-            "Params": f"{est['params'] / 1e6:.1f}M",
-            "Model Memory": f"{bytes_to_gb(est['model_memory']):.2f}GB",
-            "Gradients": f"{bytes_to_gb(est['gradient_memory']):.2f}GB",
-            "Optimizer": f"{bytes_to_gb(est['optimizer_memory']):.2f}GB",
-            "Activations": f"{bytes_to_gb(est['activation_memory']):.2f}GB",
-            "Inference Total": f"{bytes_to_gb(est['inference_total']):.2f}GB",
-            "Training Total": f"{bytes_to_gb(est['training_total']):.2f}GB",
-        })
+        data.append(
+            {
+                "Model": name,
+                "Params": f"{est['params'] / 1e6:.1f}M",
+                "Model Memory": f"{bytes_to_gb(est['model_memory']):.2f}GB",
+                "Gradients": f"{bytes_to_gb(est['gradient_memory']):.2f}GB",
+                "Optimizer": f"{bytes_to_gb(est['optimizer_memory']):.2f}GB",
+                "Activations": f"{bytes_to_gb(est['activation_memory']):.2f}GB",
+                "Inference Total": f"{bytes_to_gb(est['inference_total']):.2f}GB",
+                "Training Total": f"{bytes_to_gb(est['training_total']):.2f}GB",
+            }
+        )
     return pd.DataFrame(data)
 
 
@@ -300,24 +302,26 @@ def print_theoretical_estimates():
 def get_parameter_breakdown_df() -> pd.DataFrame:
     """Get parameter breakdown as a DataFrame."""
     data = []
-    for config in MODEL_CONFIGS:
+    for name, config in MODEL_CONFIGS.items():
         breakdown = get_parameter_breakdown(config)
-        data.append({
-            "Model": config.name,
-            "d_model": config.d_model,
-            "d_ff": config.d_ff,
-            "Layers": config.num_layers,
-            "Heads": config.num_heads,
-            "Attention/Layer": f"{breakdown['attention_per_layer']:,}",
-            "FFN/Layer": f"{breakdown['ffn_per_layer']:,}",
-            "RMSNorm/Layer": f"{breakdown['rmsnorm_per_layer']:,}",
-            "Total/Layer": f"{breakdown['total_per_layer']:,}",
-            "All Layers": f"{breakdown['all_layers']:,}",
-            "Embedding": f"{breakdown['embedding']:,}",
-            "LM Head": f"{breakdown['lm_head']:,}",
-            "Total Params": f"{breakdown['total']:,}",
-            "Memory (FP32)": f"{bytes_to_gb(breakdown['total'] * 4):.2f}GB",
-        })
+        data.append(
+            {
+                "Model": name,
+                "d_model": config.d_model,
+                "d_ff": config.d_ff,
+                "Layers": config.num_layers,
+                "Heads": config.num_heads,
+                "Attention/Layer": f"{breakdown['attention_per_layer']:,}",
+                "FFN/Layer": f"{breakdown['ffn_per_layer']:,}",
+                "RMSNorm/Layer": f"{breakdown['rmsnorm_per_layer']:,}",
+                "Total/Layer": f"{breakdown['total_per_layer']:,}",
+                "All Layers": f"{breakdown['all_layers']:,}",
+                "Embedding": f"{breakdown['embedding']:,}",
+                "LM Head": f"{breakdown['lm_head']:,}",
+                "Total Params": f"{breakdown['total']:,}",
+                "Memory (FP32)": f"{bytes_to_gb(breakdown['total'] * 4):.2f}GB",
+            }
+        )
     return pd.DataFrame(data)
 
 
@@ -347,33 +351,39 @@ def get_actual_measurements_df(batch_size: int = 1, seq_len: int = 512) -> Optio
         )
 
         if results is None:
-            data.append({
-                "Model": config.name,
-                "Params": "N/A",
-                "Model Memory": "CUDA not available",
-                "Inference Activation": "N/A",
-                "Inference Peak": "N/A",
-                "Training Peak": "N/A",
-            })
+            data.append(
+                {
+                    "Model": config.name,
+                    "Params": "N/A",
+                    "Model Memory": "CUDA not available",
+                    "Inference Activation": "N/A",
+                    "Inference Peak": "N/A",
+                    "Training Peak": "N/A",
+                }
+            )
         elif "error" in results:
-            data.append({
-                "Model": config.name,
-                "Params": "N/A",
-                "Model Memory": results["error"],
-                "Inference Activation": "N/A",
-                "Inference Peak": "N/A",
-                "Training Peak": "N/A",
-            })
+            data.append(
+                {
+                    "Model": config.name,
+                    "Params": "N/A",
+                    "Model Memory": results["error"],
+                    "Inference Activation": "N/A",
+                    "Inference Peak": "N/A",
+                    "Training Peak": "N/A",
+                }
+            )
         else:
             training_peak = results.get("training_peak", 0)
-            data.append({
-                "Model": config.name,
-                "Params": f"{results['params'] / 1e6:.1f}M",
-                "Model Memory": f"{bytes_to_gb(results['model_memory']):.2f}GB",
-                "Inference Activation": f"{bytes_to_gb(results['inference_activation']):.2f}GB",
-                "Inference Peak": f"{bytes_to_gb(results['inference_peak']):.2f}GB",
-                "Training Peak": f"{bytes_to_gb(training_peak):.2f}GB" if training_peak else "N/A",
-            })
+            data.append(
+                {
+                    "Model": config.name,
+                    "Params": f"{results['params'] / 1e6:.1f}M",
+                    "Model Memory": f"{bytes_to_gb(results['model_memory']):.2f}GB",
+                    "Inference Activation": f"{bytes_to_gb(results['inference_activation']):.2f}GB",
+                    "Inference Peak": f"{bytes_to_gb(results['inference_peak']):.2f}GB",
+                    "Training Peak": f"{bytes_to_gb(training_peak):.2f}GB" if training_peak else "N/A",
+                }
+            )
 
     return pd.DataFrame(data)
 
@@ -408,11 +418,13 @@ def get_gpu_recommendations_df() -> pd.DataFrame:
 
     data = []
     for name, inference, training in recommendations:
-        data.append({
-            "Model": name,
-            "Inference (FP16)": inference,
-            "Training (FP16 + AdamW)": training,
-        })
+        data.append(
+            {
+                "Model": name,
+                "Inference (FP16)": inference,
+                "Training (FP16 + AdamW)": training,
+            }
+        )
     return pd.DataFrame(data)
 
 
@@ -481,7 +493,9 @@ def save_results_to_markdown(
     sections.append("- Inference estimates assume batch_size=1, seq_len=512\n")
     sections.append("- Training estimates include model, gradients, optimizer states (Adam), and activations\n")
     sections.append("- Actual memory may vary based on PyTorch version, CUDA version, and other factors\n")
-    sections.append("- Gradient checkpointing can reduce training memory by ~50-70% at the cost of ~30% slower training\n")
+    sections.append(
+        "- Gradient checkpointing can reduce training memory by ~50-70% at the cost of ~30% slower training\n"
+    )
     sections.append("- Mixed precision training (AMP) can further reduce memory while maintaining quality\n")
 
     # Write to file
