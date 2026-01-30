@@ -13,6 +13,8 @@ import torch.nn as nn
 from dataclasses import dataclass
 from typing import Optional
 
+import pandas as pd
+
 # Add the cs336-basics package to path
 sys.path.insert(0, "/root/assignment2-systems/cs336-basics")
 
@@ -260,6 +262,24 @@ def measure_memory_actual(
         return {"error": str(e)}
 
 
+def get_theoretical_estimates_df(dtype: torch.dtype = torch.float32) -> pd.DataFrame:
+    """Get theoretical memory estimates as a DataFrame."""
+    data = []
+    for config in MODEL_CONFIGS:
+        est = estimate_memory_theoretical(config, dtype)
+        data.append({
+            "Model": config.name,
+            "Params": f"{est['params'] / 1e6:.1f}M",
+            "Model Memory": f"{bytes_to_gb(est['model_memory']):.2f}GB",
+            "Gradients": f"{bytes_to_gb(est['gradient_memory']):.2f}GB",
+            "Optimizer": f"{bytes_to_gb(est['optimizer_memory']):.2f}GB",
+            "Activations": f"{bytes_to_gb(est['activation_memory']):.2f}GB",
+            "Inference Total": f"{bytes_to_gb(est['inference_total']):.2f}GB",
+            "Training Total": f"{bytes_to_gb(est['training_total']):.2f}GB",
+        })
+    return pd.DataFrame(data)
+
+
 def print_theoretical_estimates():
     """Print theoretical memory estimates for all model configurations."""
     print("=" * 100)
@@ -268,47 +288,37 @@ def print_theoretical_estimates():
 
     # FP32 estimates
     print("\n### FP32 (float32) ###\n")
-    print(
-        f"{'Model':<8} {'Params':>12} {'Model':>12} {'Gradients':>12} {'Optimizer':>12} {'Activations':>12} {'Inference':>12} {'Training':>12}"
-    )
-    print(f"{'':8} {'':>12} {'Memory':>12} {'Memory':>12} {'(Adam)':>12} {'Memory':>12} {'Total':>12} {'Total':>12}")
-    print("-" * 100)
-
-    for config in MODEL_CONFIGS:
-        est = estimate_memory_theoretical(config, torch.float32)
-        print(
-            f"{config.name:<8} "
-            f"{est['params'] / 1e6:>10.1f}M "
-            f"{bytes_to_gb(est['model_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['gradient_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['optimizer_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['activation_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['inference_total']):>10.2f}GB "
-            f"{bytes_to_gb(est['training_total']):>10.2f}GB"
-        )
+    df_fp32 = get_theoretical_estimates_df(torch.float32)
+    print(df_fp32.to_markdown(index=False))
 
     # FP16/BF16 estimates
     print("\n### FP16/BF16 (float16/bfloat16) ###\n")
-    print(
-        f"{'Model':<8} {'Params':>12} {'Model':>12} {'Gradients':>12} {'Optimizer':>12} {'Activations':>12} {'Inference':>12} {'Training':>12}"
-    )
-    print(
-        f"{'':8} {'':>12} {'Memory':>12} {'Memory':>12} {'(Adam FP32)':>12} {'Memory':>12} {'Total':>12} {'Total':>12}"
-    )
-    print("-" * 100)
+    df_fp16 = get_theoretical_estimates_df(torch.float16)
+    print(df_fp16.to_markdown(index=False))
 
+
+def get_parameter_breakdown_df() -> pd.DataFrame:
+    """Get parameter breakdown as a DataFrame."""
+    data = []
     for config in MODEL_CONFIGS:
-        est = estimate_memory_theoretical(config, torch.float16)
-        print(
-            f"{config.name:<8} "
-            f"{est['params'] / 1e6:>10.1f}M "
-            f"{bytes_to_gb(est['model_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['gradient_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['optimizer_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['activation_memory']):>10.2f}GB "
-            f"{bytes_to_gb(est['inference_total']):>10.2f}GB "
-            f"{bytes_to_gb(est['training_total']):>10.2f}GB"
-        )
+        breakdown = get_parameter_breakdown(config)
+        data.append({
+            "Model": config.name,
+            "d_model": config.d_model,
+            "d_ff": config.d_ff,
+            "Layers": config.num_layers,
+            "Heads": config.num_heads,
+            "Attention/Layer": f"{breakdown['attention_per_layer']:,}",
+            "FFN/Layer": f"{breakdown['ffn_per_layer']:,}",
+            "RMSNorm/Layer": f"{breakdown['rmsnorm_per_layer']:,}",
+            "Total/Layer": f"{breakdown['total_per_layer']:,}",
+            "All Layers": f"{breakdown['all_layers']:,}",
+            "Embedding": f"{breakdown['embedding']:,}",
+            "LM Head": f"{breakdown['lm_head']:,}",
+            "Total Params": f"{breakdown['total']:,}",
+            "Memory (FP32)": f"{bytes_to_gb(breakdown['total'] * 4):.2f}GB",
+        })
+    return pd.DataFrame(data)
 
 
 def print_parameter_breakdown():
@@ -317,40 +327,55 @@ def print_parameter_breakdown():
     print("PARAMETER BREAKDOWN BY COMPONENT")
     print("=" * 100 + "\n")
 
+    df = get_parameter_breakdown_df()
+    print(df.to_markdown(index=False))
+
+
+def get_actual_measurements_df(batch_size: int = 1, seq_len: int = 512) -> Optional[pd.DataFrame]:
+    """Get actual GPU memory measurements as a DataFrame."""
+    if not torch.cuda.is_available():
+        return None
+
+    data = []
     for config in MODEL_CONFIGS:
-        breakdown = get_parameter_breakdown(config)
-        print(
-            f"### {config.name.upper()} (d_model={config.d_model}, d_ff={config.d_ff}, layers={config.num_layers}, heads={config.num_heads}) ###"
+        results = measure_memory_actual(
+            config,
+            dtype=torch.float32,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            measure_training=True,
         )
-        print(
-            f"  Attention per layer:  {breakdown['attention_per_layer']:>15,} params ({bytes_to_mb(breakdown['attention_per_layer'] * 4):>8.2f} MB FP32)"
-        )
-        print(
-            f"  FFN per layer:        {breakdown['ffn_per_layer']:>15,} params ({bytes_to_mb(breakdown['ffn_per_layer'] * 4):>8.2f} MB FP32)"
-        )
-        print(
-            f"  RMSNorm per layer:    {breakdown['rmsnorm_per_layer']:>15,} params ({bytes_to_mb(breakdown['rmsnorm_per_layer'] * 4):>8.2f} MB FP32)"
-        )
-        print(
-            f"  Total per layer:      {breakdown['total_per_layer']:>15,} params ({bytes_to_mb(breakdown['total_per_layer'] * 4):>8.2f} MB FP32)"
-        )
-        print(
-            f"  All layers ({config.num_layers:>2}):      {breakdown['all_layers']:>15,} params ({bytes_to_gb(breakdown['all_layers'] * 4):>8.2f} GB FP32)"
-        )
-        print(
-            f"  Token Embedding:      {breakdown['embedding']:>15,} params ({bytes_to_mb(breakdown['embedding'] * 4):>8.2f} MB FP32)"
-        )
-        print(
-            f"  LM Head:              {breakdown['lm_head']:>15,} params ({bytes_to_mb(breakdown['lm_head'] * 4):>8.2f} MB FP32)"
-        )
-        print(
-            f"  Final LayerNorm:      {breakdown['final_ln']:>15,} params ({bytes_to_mb(breakdown['final_ln'] * 4):>8.2f} MB FP32)"
-        )
-        print(f"  ----------------------------------------")
-        print(
-            f"  TOTAL:                {breakdown['total']:>15,} params ({bytes_to_gb(breakdown['total'] * 4):>8.2f} GB FP32)"
-        )
-        print()
+
+        if results is None:
+            data.append({
+                "Model": config.name,
+                "Params": "N/A",
+                "Model Memory": "CUDA not available",
+                "Inference Activation": "N/A",
+                "Inference Peak": "N/A",
+                "Training Peak": "N/A",
+            })
+        elif "error" in results:
+            data.append({
+                "Model": config.name,
+                "Params": "N/A",
+                "Model Memory": results["error"],
+                "Inference Activation": "N/A",
+                "Inference Peak": "N/A",
+                "Training Peak": "N/A",
+            })
+        else:
+            training_peak = results.get("training_peak", 0)
+            data.append({
+                "Model": config.name,
+                "Params": f"{results['params'] / 1e6:.1f}M",
+                "Model Memory": f"{bytes_to_gb(results['model_memory']):.2f}GB",
+                "Inference Activation": f"{bytes_to_gb(results['inference_activation']):.2f}GB",
+                "Inference Peak": f"{bytes_to_gb(results['inference_peak']):.2f}GB",
+                "Training Peak": f"{bytes_to_gb(training_peak):.2f}GB" if training_peak else "N/A",
+            })
+
+    return pd.DataFrame(data)
 
 
 def print_actual_measurements(batch_size: int = 1, seq_len: int = 512):
@@ -365,44 +390,14 @@ def print_actual_measurements(batch_size: int = 1, seq_len: int = 512):
     print(f"Total GPU Memory: {bytes_to_gb(torch.cuda.get_device_properties(0).total_memory):.2f} GB")
     print("=" * 100 + "\n")
 
-    # Test with FP16
     print("### FP32 (float32) Measurements ###\n")
-    print(f"{'Model':<8} {'Params':>12} {'Model':>12} {'Inference':>12} {'Inference':>12} {'Training':>12}")
-    print(f"{'':8} {'':>12} {'Memory':>12} {'Activation':>12} {'Peak':>12} {'Peak':>12}")
-    print("-" * 80)
-
-    for config in MODEL_CONFIGS:
-        results = measure_memory_actual(
-            config,
-            dtype=torch.float32,
-            batch_size=batch_size,
-            seq_len=seq_len,
-            measure_training=True,
-        )
-
-        if results is None:
-            print(f"{config.name:<8} {'CUDA not available':>60}")
-        elif "error" in results:
-            print(f"{config.name:<8} {results['error']:>60}")
-        else:
-            training_peak = results.get("training_peak", 0)
-            training_str = f"{bytes_to_gb(training_peak):>10.2f}GB" if training_peak else "N/A"
-            print(
-                f"{config.name:<8} "
-                f"{results['params'] / 1e6:>10.1f}M "
-                f"{bytes_to_gb(results['model_memory']):>10.2f}GB "
-                f"{bytes_to_gb(results['inference_activation']):>10.2f}GB "
-                f"{bytes_to_gb(results['inference_peak']):>10.2f}GB "
-                f"{training_str}"
-            )
+    df = get_actual_measurements_df(batch_size, seq_len)
+    if df is not None:
+        print(df.to_markdown(index=False))
 
 
-def print_gpu_recommendations():
-    """Print GPU recommendations for each model size."""
-    print("\n" + "=" * 100)
-    print("GPU RECOMMENDATIONS")
-    print("=" * 100 + "\n")
-
+def get_gpu_recommendations_df() -> pd.DataFrame:
+    """Get GPU recommendations as a DataFrame."""
     recommendations = [
         ("small", "RTX 3060 12GB / RTX 4060 8GB", "RTX 3090 24GB / RTX 4090 24GB"),
         ("medium", "RTX 3090 24GB / RTX 4090 24GB", "A100 40GB / 2x RTX 4090"),
@@ -411,10 +406,24 @@ def print_gpu_recommendations():
         ("2.7B", "A100 80GB / H100 80GB", "4x A100 80GB / 2x H100 80GB"),
     ]
 
-    print(f"{'Model':<8} {'Inference (FP16)':<35} {'Training (FP16 + AdamW)':<40}")
-    print("-" * 85)
+    data = []
     for name, inference, training in recommendations:
-        print(f"{name:<8} {inference:<35} {training:<40}")
+        data.append({
+            "Model": name,
+            "Inference (FP16)": inference,
+            "Training (FP16 + AdamW)": training,
+        })
+    return pd.DataFrame(data)
+
+
+def print_gpu_recommendations():
+    """Print GPU recommendations for each model size."""
+    print("\n" + "=" * 100)
+    print("GPU RECOMMENDATIONS")
+    print("=" * 100 + "\n")
+
+    df = get_gpu_recommendations_df()
+    print(df.to_markdown(index=False))
 
     print("\n### Notes ###")
     print("- Inference estimates assume batch_size=1, seq_len=512")
@@ -422,6 +431,64 @@ def print_gpu_recommendations():
     print("- Actual memory may vary based on PyTorch version, CUDA version, and other factors")
     print("- Gradient checkpointing can reduce training memory by ~50-70% at the cost of ~30% slower training")
     print("- Mixed precision training (AMP) can further reduce memory while maintaining quality")
+
+
+def save_results_to_markdown(
+    output_path: str = "memory_estimation_results.md",
+    batch_size: int = 4,
+    seq_len: int = 512,
+) -> None:
+    """Save all estimation results to a markdown file."""
+    sections = []
+
+    # Header
+    sections.append("# GPU Memory Estimation Results\n")
+    sections.append(f"Batch Size: {batch_size}, Sequence Length: {seq_len}\n")
+
+    # Parameter Breakdown
+    sections.append("\n## Parameter Breakdown\n")
+    df_params = get_parameter_breakdown_df()
+    sections.append(df_params.to_markdown(index=False))
+
+    # Theoretical Memory Estimation (FP32)
+    sections.append("\n\n## Theoretical Memory Estimation (FP32)\n")
+    df_fp32 = get_theoretical_estimates_df(torch.float32)
+    sections.append(df_fp32.to_markdown(index=False))
+
+    # Theoretical Memory Estimation (FP16)
+    sections.append("\n\n## Theoretical Memory Estimation (FP16)\n")
+    df_fp16 = get_theoretical_estimates_df(torch.float16)
+    sections.append(df_fp16.to_markdown(index=False))
+
+    # Actual GPU Measurements
+    sections.append("\n\n## Actual GPU Measurements\n")
+    if torch.cuda.is_available():
+        sections.append(f"GPU: {torch.cuda.get_device_name(0)}\n")
+        sections.append(f"Total GPU Memory: {bytes_to_gb(torch.cuda.get_device_properties(0).total_memory):.2f} GB\n\n")
+        df_actual = get_actual_measurements_df(batch_size, seq_len)
+        if df_actual is not None:
+            sections.append(df_actual.to_markdown(index=False))
+    else:
+        sections.append("CUDA is not available. Skipping actual measurements.\n")
+
+    # GPU Recommendations
+    sections.append("\n\n## GPU Recommendations\n")
+    df_recommendations = get_gpu_recommendations_df()
+    sections.append(df_recommendations.to_markdown(index=False))
+
+    # Notes
+    sections.append("\n\n### Notes\n")
+    sections.append("- Inference estimates assume batch_size=1, seq_len=512\n")
+    sections.append("- Training estimates include model, gradients, optimizer states (Adam), and activations\n")
+    sections.append("- Actual memory may vary based on PyTorch version, CUDA version, and other factors\n")
+    sections.append("- Gradient checkpointing can reduce training memory by ~50-70% at the cost of ~30% slower training\n")
+    sections.append("- Mixed precision training (AMP) can further reduce memory while maintaining quality\n")
+
+    # Write to file
+    with open(output_path, "w") as f:
+        f.write("".join(sections))
+
+    print(f"\nResults saved to: {output_path}")
 
 
 def main():
@@ -441,6 +508,9 @@ def main():
 
     # Print GPU recommendations
     print_gpu_recommendations()
+
+    # Save results to markdown file
+    save_results_to_markdown()
 
 
 if __name__ == "__main__":
