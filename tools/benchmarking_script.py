@@ -23,6 +23,7 @@ import statistics  # 统计计算模块（用于计算均值和标准差）
 import timeit  # 高精度计时模块
 from memory_estimation import ModelConfig, MODEL_CONFIGS
 import torch  # PyTorch 深度学习框架
+import torch.cuda.nvtx as nvtx
 
 
 def _mean_std(xs: list[float]) -> tuple[float, float]:
@@ -177,33 +178,44 @@ def benchmark(model, x, mode, warmup_steps, steps, device, dtype, use_autocast=F
     total_iters = warmup_steps + steps  # 总迭代次数 = 预热 + 正式测量
     timer = timeit.default_timer  # 使用系统最高精度时钟（比 time.time() 更精确）
 
+    optimizer = torch.optim.AdamW(model.parameters())
+
     for i in range(total_iters):
-        # 如果是前向+反向模式，需要先清除梯度
-        if mode == "fwd_bwd":
-            model.zero_grad(set_to_none=True)  # 设为 None 比设为 0 更高效
+        # 前向传播
+        with nvtx.range("fwd"):
+            t0 = timer()  # 记录前向开始时间
 
-        # ---------- 前向传播 ----------
-        _synchronize_if_needed(device)  # 同步 GPU，确保之前的操作完成
-        t0 = timer()  # 记录前向开始时间
-
-        # 使用自动混合精度进行前向传播
-        with torch.autocast(device_type="cuda", dtype=dtype, enabled=use_autocast):
-            logits = model(x)  # 前向传播，获取 logits
+            # 使用自动混合精度进行前向传播
+            with torch.autocast(device_type="cuda", dtype=dtype, enabled=use_autocast):
+                logits = model(x)  # 前向传播，获取 logits
             # 如果需要反向传播，计算一个简单的损失（logits 均值）
             loss = logits.float().mean() if mode == "fwd_bwd" else None
+            # 同步 GPU，确保前向传播完成
+            _synchronize_if_needed(device)
+            t1 = timer()  # 记录前向结束时间
 
-        _synchronize_if_needed(device)  # 同步 GPU，确保前向传播完成
-        t1 = timer()  # 记录前向结束时间
-
-        # ---------- 反向传播 ----------
+        # 反向传播
         if mode == "fwd_bwd":
-            assert loss is not None
-            loss.backward()  # 反向传播计算梯度
+            # 梯度裁剪
+            with nvtx.range("clip_grad_norm_"):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                _synchronize_if_needed(device)
+            # 优化器步进
+            with nvtx.range("optimizer_step"):
+                optimizer.step()
+                _synchronize_if_needed(device)
+            # 反向传播计算梯度
+            with nvtx.range("bwd"):
+                loss.backward()
+                _synchronize_if_needed(device)
+            # 清除梯度
+            with nvtx.range("zero_grad"):
+                model.zero_grad(set_to_none=True)
+                _synchronize_if_needed(device)
 
-        _synchronize_if_needed(device)  # 同步 GPU，确保反向传播完成
         t2 = timer()  # 记录反向结束时间
 
-        # ---------- 记录耗时（仅在预热后） ----------
+        # 记录耗时（仅在预热后）
         if i >= warmup_steps:
             # 预热结束后才开始记录正式测量的耗时
             fwd_times_s.append(t1 - t0)  # 前向耗时
